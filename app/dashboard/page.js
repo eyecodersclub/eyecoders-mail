@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 
@@ -294,6 +294,80 @@ const quillFormats = [
   "code-block",
 ];
 
+// ───────── Mail History Detail Modal ─────────
+function HistoryMailModal({ mail, onClose, onReuse }) {
+  if (!mail) return null;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="history-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="history-modal-header">
+          <div className="history-modal-title">
+            <span
+              className={`sent-log-status sent-log-status--${
+                mail.success ? "success" : "error"
+              }`}
+            />
+            <h3>{mail.subject || "(No Subject)"}</h3>
+          </div>
+          <button className="history-modal-close" onClick={onClose}>
+            ×
+          </button>
+        </div>
+
+        <div className="history-modal-meta">
+          <div className="meta-row">
+            <span className="meta-label">To:</span>
+            <span className="meta-value">{mail.to?.join(", ") || "None"}</span>
+          </div>
+          {mail.cc && mail.cc.length > 0 && (
+            <div className="meta-row">
+              <span className="meta-label">CC:</span>
+              <span className="meta-value">{mail.cc.join(", ")}</span>
+            </div>
+          )}
+          <div className="meta-row">
+            <span className="meta-label">Sent At:</span>
+            <span className="meta-value">
+              {new Date(mail.time).toLocaleString()}
+            </span>
+          </div>
+          {mail.error && (
+            <div className="meta-row meta-row--error">
+              <span className="meta-label">Error:</span>
+              <span className="meta-value">{mail.error}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="history-modal-body">
+          <div className="history-modal-body-label">Email Body Content:</div>
+          <div className="history-modal-iframe-wrapper">
+            <iframe
+              className="history-modal-iframe"
+              srcDoc={
+                mail.html ||
+                `<!DOCTYPE html><html><body><p><em>(Empty content)</em></p></body></html>`
+              }
+              title="History Email Content"
+              sandbox="allow-same-origin"
+            />
+          </div>
+        </div>
+
+        <div className="history-modal-footer">
+          <button className="btn-secondary" onClick={onClose}>
+            Close
+          </button>
+          <button className="btn-primary-small" onClick={() => onReuse(mail)}>
+            ✏️ Load & Edit in Composer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ───────── Main Dashboard Page ─────────
 export default function DashboardPage() {
   const router = useRouter();
@@ -310,8 +384,64 @@ export default function DashboardPage() {
   // Toast state
   const [toasts, setToasts] = useState([]);
 
-  // Sent mail log (session only)
+  // Sent mail log & preview modal state
   const [sentLog, setSentLog] = useState([]);
+  const [selectedHistoryMail, setSelectedHistoryMail] = useState(null);
+
+  // Load sent history from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("eyecoders_sent_log");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setSentLog(parsed);
+      }
+    } catch (e) {
+      console.error("Failed to load sent history", e);
+    }
+  }, []);
+
+  const saveToSentLog = (logItem) => {
+    setSentLog((prev) => {
+      const updated = [logItem, ...prev];
+      try {
+        localStorage.setItem("eyecoders_sent_log", JSON.stringify(updated));
+      } catch (e) {
+        console.error("Failed to save sent history", e);
+      }
+      return updated;
+    });
+  };
+
+  const handleClearHistory = () => {
+    setSentLog([]);
+    try {
+      localStorage.removeItem("eyecoders_sent_log");
+    } catch (e) {}
+    addToast("success", "History Cleared", "Sent mail history has been reset.");
+  };
+
+  const handleReuseInComposer = (item) => {
+    setToEmails(item.to || []);
+    setCcEmails(item.cc || []);
+    setSubject(item.subject || "");
+    const mode = item.editorMode || "wysiwyg";
+    setEditorMode(mode);
+    if (mode === "wysiwyg") {
+      setHtmlContent(item.html || "");
+      setRawHtml("");
+    } else {
+      setRawHtml(item.html || "");
+      setHtmlContent("");
+    }
+    setSelectedHistoryMail(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    addToast(
+      "success",
+      "Loaded into Composer ✏️",
+      "Email content has been loaded. You can now edit and resend it."
+    );
+  };
 
   const addToast = useCallback((type, title, message) => {
     const id = Date.now();
@@ -397,34 +527,33 @@ export default function DashboardPage() {
           "Send Failed",
           data.error || "Something went wrong."
         );
-        setSentLog((prev) => [
-          {
-            id: Date.now(),
-            success: false,
-            subject: subject.trim(),
-            to: toEmails,
-            error: data.error,
-            time: new Date(),
-          },
-          ...prev,
-        ]);
+        saveToSentLog({
+          id: Date.now(),
+          success: false,
+          subject: subject.trim(),
+          to: [...toEmails],
+          cc: [...ccEmails],
+          html: body,
+          editorMode: editorMode,
+          error: data.error,
+          time: new Date().toISOString(),
+        });
       } else {
         addToast(
           "success",
           "Email Sent! 🎉",
           `Delivered to ${toEmails.join(", ")}`
         );
-        setSentLog((prev) => [
-          {
-            id: Date.now(),
-            success: true,
-            subject: subject.trim(),
-            to: toEmails,
-            cc: ccEmails,
-            time: new Date(),
-          },
-          ...prev,
-        ]);
+        saveToSentLog({
+          id: Date.now(),
+          success: true,
+          subject: subject.trim(),
+          to: [...toEmails],
+          cc: [...ccEmails],
+          html: body,
+          editorMode: editorMode,
+          time: new Date().toISOString(),
+        });
 
         // Reset form
         setToEmails([]);
@@ -647,15 +776,27 @@ export default function DashboardPage() {
 
           {/* Sent Log */}
           <div className="sent-log">
-            <div className="sent-log-title">
-              📬 Sent History
+            <div className="sent-log-header">
+              <div className="sent-log-title">
+                📬 Sent History
+                {sentLog.length > 0 && (
+                  <span className="sent-log-badge">{sentLog.length}</span>
+                )}
+              </div>
               {sentLog.length > 0 && (
-                <span className="sent-log-badge">{sentLog.length}</span>
+                <button
+                  type="button"
+                  className="sent-log-clear-btn"
+                  onClick={handleClearHistory}
+                >
+                  Clear History
+                </button>
               )}
             </div>
+
             {sentLog.length === 0 ? (
               <div className="sent-log-empty">
-                No emails sent yet this session. Sent emails will appear here.
+                No emails sent yet. Sent emails will appear here for you to view, edit, and resend.
               </div>
             ) : (
               <div className="sent-log-list">
@@ -666,18 +807,44 @@ export default function DashboardPage() {
                         item.success ? "success" : "error"
                       }`}
                     />
-                    <div className="sent-log-content">
-                      <div className="sent-log-subject">{item.subject}</div>
+                    <div
+                      className="sent-log-content"
+                      onClick={() => setSelectedHistoryMail(item)}
+                    >
+                      <div className="sent-log-subject">
+                        {item.subject || "(No Subject)"}
+                      </div>
                       <div className="sent-log-recipients">
-                        To: {item.to.join(", ")}
+                        To: {item.to ? item.to.join(", ") : "None"}
                         {item.cc && item.cc.length > 0
                           ? ` | CC: ${item.cc.join(", ")}`
                           : ""}
                         {item.error ? ` — Error: ${item.error}` : ""}
                       </div>
                     </div>
-                    <div className="sent-log-time">
-                      {item.time.toLocaleTimeString()}
+                    <div className="sent-log-actions">
+                      <button
+                        type="button"
+                        className="sent-action-btn"
+                        title="View Email Details & Content"
+                        onClick={() => setSelectedHistoryMail(item)}
+                      >
+                        👁️ View
+                      </button>
+                      <button
+                        type="button"
+                        className="sent-action-btn sent-action-btn--primary"
+                        title="Load into Composer to Edit & Resend"
+                        onClick={() => handleReuseInComposer(item)}
+                      >
+                        ✏️ Edit & Resend
+                      </button>
+                      <div className="sent-log-time">
+                        {new Date(item.time).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -686,6 +853,15 @@ export default function DashboardPage() {
           </div>
         </div>
       </main>
+
+      {/* History Detail Modal */}
+      {selectedHistoryMail && (
+        <HistoryMailModal
+          mail={selectedHistoryMail}
+          onClose={() => setSelectedHistoryMail(null)}
+          onReuse={handleReuseInComposer}
+        />
+      )}
     </div>
   );
 }
